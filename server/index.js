@@ -1,26 +1,43 @@
+// server/index.js
 import 'dotenv/config';
 import express from 'express';
 import cookieParser from 'cookie-parser';
 import jwt from 'jsonwebtoken';
-import cors from 'cors';
 
 const app = express();
 app.use(express.json());
 app.use(cookieParser());
 
-// URL do frontend (Render) – defina via env FRONTEND_ORIGIN
-const FRONTEND_ORIGIN = process.env.FRONTEND_ORIGIN || 'http://localhost:5173';
-
-app.use(
-  cors({
-    origin: FRONTEND_ORIGIN,
-    credentials: true,
-  })
+// Liste as origens permitidas separadas por vírgula na ENV FRONTEND_ORIGINS
+// Ex.: https://reactjs-simulador-de-vendas-v3.vercel.app,https://reactjs-simulador-de-vendas-v3-jwu4e7v84.vercel.app
+const ALLOWED = new Set(
+  (process.env.FRONTEND_ORIGINS || 'https://reactjs-simulador-de-vendas-v3.vercel.app,https://reactjs-simulador-de-vendas-v3-jwu4e7v84.vercel.app')
+    .split(',')
+    .map(s => s.trim())
+    .filter(Boolean)
 );
 
-const ADMIN_USER = process.env.ADMIN_USER || 'admin';
-const ADMIN_PASS = process.env.ADMIN_PASS || 'admin123';
-const SESSION_SECRET = process.env.SESSION_SECRET || 'dev-secret';
+// 🔒 Middleware CORS manual (NÃO use cors() e NÃO defina ACAO em outro lugar)
+app.use((req, res, next) => {
+  const origin = req.headers.origin;
+  if (origin && (ALLOWED.has(origin) /* ou regra extra se quiser */)) {
+    res.header('Access-Control-Allow-Origin', origin); // ← apenas UM valor
+    res.header('Vary', 'Origin');                      // importante p/ cache
+  }
+  res.header('Access-Control-Allow-Credentials', 'true');
+  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  res.header('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
+
+  if (req.method === 'OPTIONS') {
+    return res.sendStatus(204);
+  }
+  next();
+});
+
+// ---- rotas abaixo ----
+const ADMIN_USER = process.env.ADMIN_USER;
+const ADMIN_PASS = process.env.ADMIN_PASS;
+const SESSION_SECRET = process.env.SESSION_SECRET;
 const PORT = process.env.PORT || 4000;
 
 function cookieOpts() {
@@ -37,25 +54,21 @@ function cookieOpts() {
 app.post('/api/login', (req, res) => {
   const { username, password } = req.body || {};
   const ok = username === ADMIN_USER && password === ADMIN_PASS;
-
-  if (!ok) {
-    return res.status(401).json({ ok: false, message: 'Credenciais inválidas.' });
-  }
+  if (!ok) return res.status(401).json({ ok: false, message: 'Credenciais inválidas.' });
 
   const token = jwt.sign({ u: username }, SESSION_SECRET, { expiresIn: '2h' });
   res.cookie('sid', token, cookieOpts());
-  return res.json({ ok: true });
+  res.json({ ok: true });
 });
 
 app.get('/api/me', (req, res) => {
   const token = req.cookies?.sid;
   if (!token) return res.status(401).json({ ok: false });
-
   try {
     jwt.verify(token, SESSION_SECRET);
-    return res.json({ ok: true });
+    res.json({ ok: true });
   } catch {
-    return res.status(401).json({ ok: false });
+    res.status(401).json({ ok: false });
   }
 });
 
@@ -66,6 +79,4 @@ app.post('/api/logout', (req, res) => {
 
 app.get('/', (_, res) => res.send('API OK'));
 
-app.listen(PORT, () => {
-  console.log(`API on http://localhost:${PORT}`);
-});
+app.listen(PORT, () => console.log(`API on http://localhost:${PORT}`));
