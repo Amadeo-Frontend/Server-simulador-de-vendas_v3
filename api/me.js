@@ -1,16 +1,14 @@
 import { withCors, readCookie, verifySession } from './_utils.js';
 
-export default async function handler(req, res) {
-  if (withCors(req, res)) return;
+export default withCors(async (req, res) => {
+  const token = readCookie(req, 'session');
+  const payload = token ? verifySession(token) : null;
 
-  if (req.method !== 'GET') {
-    res.setHeader('Allow', 'GET, OPTIONS');
-    return res.status(405).end();
+  if (!payload) {
+    res.statusCode = 401;
+    return res.end(JSON.stringify({ ok: false }));
   }
 
-  const token = readCookie(req, 'sid');
-  const claims = token ? verifySession(token) : null;
-  if (!claims) return res.status(401).json({ ok: false });
-
-  return res.json({ ok: true });
-}
+  res.statusCode = 200;
+  return res.end(JSON.stringify({ ok: true, user: { username: payload.sub } }));
+});

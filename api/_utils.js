@@ -1,7 +1,7 @@
 // src/api/_utils.js
 import crypto from 'crypto';
 
-/* --------- CORS helper (para handlers puros) --------- */
+/* -------------------- CORS (para handlers "puros") -------------------- */
 export function withCors(handler) {
   return async (req, res) => {
     const origin = req.headers.origin;
@@ -27,7 +27,19 @@ export function withCors(handler) {
   };
 }
 
-/* --------- Cookie helper (dev vs prod) --------- */
+/* -------------------- Cookies -------------------- */
+export function readCookie(req, name) {
+  const raw = req.headers.cookie || '';
+  if (!raw) return null;
+  const map = Object.fromEntries(
+    raw.split(';').map(p => {
+      const [k, ...v] = p.trim().split('=');
+      return [decodeURIComponent(k), decodeURIComponent(v.join('='))];
+    })
+  );
+  return map[name] || null;
+}
+
 export function setCookie(res, name, value, { maxAgeMs = 2 * 60 * 60 * 1000 } = {}) {
   const isProd = process.env.NODE_ENV === 'production';
   const expires = new Date(Date.now() + maxAgeMs).toUTCString();
@@ -43,7 +55,21 @@ export function setCookie(res, name, value, { maxAgeMs = 2 * 60 * 60 * 1000 } = 
   res.setHeader('Set-Cookie', parts.join('; '));
 }
 
-/* --------- Sessão simples (HMAC “JWT-like”) --------- */
+export function clearCookie(res, name) {
+  const isProd = process.env.NODE_ENV === 'production';
+  const parts = [
+    `${name}=;`,
+    'Path=/',
+    'HttpOnly',
+    isProd ? 'SameSite=None' : 'SameSite=Lax',
+    isProd ? 'Secure' : null,
+    'Expires=Thu, 01 Jan 1970 00:00:00 GMT',
+    'Max-Age=0'
+  ].filter(Boolean);
+  res.setHeader('Set-Cookie', parts.join('; '));
+}
+
+/* -------------------- Sessão (HMAC estilo JWT) -------------------- */
 function b64url(buf) {
   return Buffer.from(buf).toString('base64url');
 }
@@ -75,15 +101,11 @@ export function verifySession(token = '') {
   }
 }
 
-/* --------- FALTAVA ESTE EXPORT --------- */
-/* Lê JSON tanto em handlers “puros” (sem express.json) quanto com express */
+/* -------------------- Body JSON (quando não tiver express.json) -------------------- */
 export async function readJson(req) {
-  // Se o body já veio parseado (express.json), apenas devolve
-  if (req.body && typeof req.body === 'object') return req.body;
-
+  if (req.body && typeof req.body === 'object') return req.body; // express.json
   const ctype = req.headers['content-type'] || '';
   if (!ctype.includes('application/json')) return {};
-
   const chunks = [];
   for await (const chunk of req) chunks.push(chunk);
   const raw = Buffer.concat(chunks).toString('utf8');

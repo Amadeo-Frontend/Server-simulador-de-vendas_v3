@@ -1,13 +1,11 @@
 import { withCors, clearCookie } from './_utils.js';
 
-export default async function handler(req, res) {
-  if (withCors(req, res)) return;
-
+export default withCors(async (req, res) => {
   if (req.method !== 'POST') {
-    res.setHeader('Allow', 'POST, OPTIONS');
-    return res.status(405).end();
+    res.statusCode = 405;
+    return res.end(JSON.stringify({ message: 'Method not allowed' }));
   }
-
-  clearCookie(res, 'sid');
-  return res.json({ ok: true });
-}
+  clearCookie(res, 'session');
+  res.statusCode = 200;
+  return res.end(JSON.stringify({ ok: true }));
+});
