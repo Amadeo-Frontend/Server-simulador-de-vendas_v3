@@ -1,28 +1,23 @@
 import { withCors, setCookie, signSession, readJson } from './_utils.js';
 
-const ADMIN_USER = process.env.ADMIN_USER || 'admin';
-const ADMIN_PASS = process.env.ADMIN_PASS || 'admin123';
-
-export default async function handler(req, res) {
-  if (withCors(req, res)) return;        // trata OPTIONS
-
+export default withCors(async (req, res) => {
   if (req.method !== 'POST') {
-    res.setHeader('Allow', 'POST, OPTIONS');
-    return res.status(405).end();
+    res.statusCode = 405;
+    return res.end(JSON.stringify({ message: 'Method not allowed' }));
   }
 
-  try {
-    const { username, password } = await readJson(req);
-    const ok = username === ADMIN_USER && password === ADMIN_PASS;
+  const { username, password } = await readJson(req);
 
-    if (!ok) {
-      return res.status(401).json({ ok: false, message: 'Credenciais inválidas.' });
-    }
-
-    const token = signSession({ u: username });
-    setCookie(res, 'sid', token);
-    return res.json({ ok: true });
-  } catch {
-    return res.status(400).json({ ok: false, message: 'Requisição inválida.' });
+  if (
+    username === process.env.ADMIN_USER &&
+    password === process.env.ADMIN_PASS
+  ) {
+    const token = signSession({ sub: username });
+    setCookie(res, 'session', token, { maxAgeMs: 2 * 60 * 60 * 1000 });
+    res.statusCode = 200;
+    return res.end(JSON.stringify({ ok: true }));
   }
-}
+
+  res.statusCode = 401;
+  return res.end(JSON.stringify({ message: 'Credenciais inválidas' }));
+});
