@@ -1,5 +1,5 @@
 // src/api/_utils.js
-import crypto from 'crypto';
+import crypto from 'node:crypto';
 
 /* ========================== CORS ========================== */
 /**
