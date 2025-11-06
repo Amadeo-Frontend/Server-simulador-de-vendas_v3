@@ -1,24 +1,47 @@
 // src/api/_utils.js
 import crypto from 'crypto';
 
-/* -------------------- CORS (para handlers "puros") -------------------- */
+/* ========================== CORS ========================== */
+/**
+ * Envolve um handler “puro” (req/res nativos) com CORS.
+ * - Respeita FRONTEND_ORIGINS (lista separada por vírgula)
+ * - Opcional: ALLOW_ALL_ORIGINS=true libera qualquer Origin (útil para debug)
+ * - CORS_DEBUG=true imprime no log os origins aceitos/recebidos
+ */
 export function withCors(handler) {
   return async (req, res) => {
     const origin = req.headers.origin;
-    const allowed = new Set(
+    const allowAll = process.env.ALLOW_ALL_ORIGINS === 'true';
+
+    const allowedSet = new Set(
       (process.env.FRONTEND_ORIGINS || process.env.FRONTEND_ORIGIN || '')
         .split(',')
         .map(s => s.trim())
         .filter(Boolean)
     );
 
-    if (origin && allowed.has(origin)) {
+    const isAllowed = allowAll || (origin && allowedSet.has(origin));
+
+    if (process.env.CORS_DEBUG === 'true') {
+      console.log('[CORS]', {
+        origin,
+        isAllowed,
+        allowAll,
+        allowed: [...allowedSet],
+      });
+    }
+
+    if (origin && isAllowed) {
       res.setHeader('Access-Control-Allow-Origin', origin);
       res.setHeader('Vary', 'Origin');
     }
+    // Observação: se quiser bloquear quando não permitido, você pode
+    // responder 403 aqui. Neste projeto, apenas não setamos o header.
+
     res.setHeader('Access-Control-Allow-Credentials', 'true');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
     res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
+
     if (req.method === 'OPTIONS') {
       res.statusCode = 204;
       return res.end();
@@ -27,7 +50,8 @@ export function withCors(handler) {
   };
 }
 
-/* -------------------- Cookies -------------------- */
+/* ========================== Cookies ========================== */
+
 export function readCookie(req, name) {
   const raw = req.headers.cookie || '';
   if (!raw) return null;
@@ -69,30 +93,34 @@ export function clearCookie(res, name) {
   res.setHeader('Set-Cookie', parts.join('; '));
 }
 
-/* -------------------- Sessão (HMAC estilo JWT) -------------------- */
-function b64url(buf) {
-  return Buffer.from(buf).toString('base64url');
+/* ========================== Sessão (HMAC tipo JWT) ========================== */
+
+function b64url(input) {
+  return Buffer.from(input).toString('base64url');
 }
-function sign(data, secret) {
+function hmac(data, secret) {
   return crypto.createHmac('sha256', secret).update(data).digest('base64url');
 }
 
+/** Cria um token assinado simples (header.payload.signature) */
 export function signSession(payload = {}, { ttlSec = 2 * 60 * 60 } = {}) {
   const header = { alg: 'HS256', typ: 'JWT' };
   const now = Math.floor(Date.now() / 1000);
   const body = { ...payload, iat: now, exp: now + ttlSec };
   const secret = process.env.SESSION_SECRET || 'dev-secret';
+
   const enc = `${b64url(JSON.stringify(header))}.${b64url(JSON.stringify(body))}`;
-  const sig = sign(enc, secret);
+  const sig = hmac(enc, secret);
   return `${enc}.${sig}`;
 }
 
+/** Valida e devolve o payload ou null */
 export function verifySession(token = '') {
   try {
     const [h, p, s] = token.split('.');
     if (!h || !p || !s) return null;
     const secret = process.env.SESSION_SECRET || 'dev-secret';
-    if (sign(`${h}.${p}`, secret) !== s) return null;
+    if (hmac(`${h}.${p}`, secret) !== s) return null;
     const payload = JSON.parse(Buffer.from(p, 'base64url').toString('utf8'));
     if (payload.exp && Math.floor(Date.now() / 1000) > payload.exp) return null;
     return payload;
@@ -101,9 +129,11 @@ export function verifySession(token = '') {
   }
 }
 
-/* -------------------- Body JSON (quando não tiver express.json) -------------------- */
+/* ========================== Body JSON / Bearer ========================== */
+
+/** Lê JSON do body mesmo sem express.json() (handlers “puros”) */
 export async function readJson(req) {
-  if (req.body && typeof req.body === 'object') return req.body; // express.json
+  if (req.body && typeof req.body === 'object') return req.body; // quando usar Express
   const ctype = req.headers['content-type'] || '';
   if (!ctype.includes('application/json')) return {};
   const chunks = [];
@@ -116,6 +146,7 @@ export async function readJson(req) {
   }
 }
 
+/** Extrai token Bearer do header Authorization */
 export function getBearerToken(req) {
   const h = req.headers.authorization || req.headers.Authorization;
   if (!h) return null;
