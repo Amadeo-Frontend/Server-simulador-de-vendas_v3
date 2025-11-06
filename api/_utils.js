@@ -115,3 +115,10 @@ export async function readJson(req) {
     return {};
   }
 }
+
+export function getBearerToken(req) {
+  const h = req.headers.authorization || req.headers.Authorization;
+  if (!h) return null;
+  const m = /^Bearer\s+(.+)$/i.exec(h);
+  return m ? m[1] : null;
+}

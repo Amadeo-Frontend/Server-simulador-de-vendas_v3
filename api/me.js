@@ -1,8 +1,11 @@
-import { withCors, readCookie, verifySession } from './_utils.js';
+import { withCors, readCookie, verifySession, getBearerToken } from './_utils.js';
 
 export default withCors(async (req, res) => {
-  const token = readCookie(req, 'session');
-  const payload = token ? verifySession(token) : null;
+  const cookieToken = readCookie(req, 'session');
+  const bearerToken = getBearerToken(req);
+
+  const t = bearerToken || cookieToken;     // prioridade para Bearer
+  const payload = t ? verifySession(t) : null;
 
   if (!payload) {
     res.statusCode = 401;

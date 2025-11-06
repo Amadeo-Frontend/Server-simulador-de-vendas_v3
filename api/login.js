@@ -8,14 +8,14 @@ export default withCors(async (req, res) => {
 
   const { username, password } = await readJson(req);
 
-  if (
-    username === process.env.ADMIN_USER &&
-    password === process.env.ADMIN_PASS
-  ) {
+  if (username === process.env.ADMIN_USER && password === process.env.ADMIN_PASS) {
     const token = signSession({ sub: username });
+
+    // mantém cookie para quem permitir (ok), mas agora também retorna o token
     setCookie(res, 'session', token, { maxAgeMs: 2 * 60 * 60 * 1000 });
+
     res.statusCode = 200;
-    return res.end(JSON.stringify({ ok: true }));
+    return res.end(JSON.stringify({ ok: true, token }));
   }
 
   res.statusCode = 401;
