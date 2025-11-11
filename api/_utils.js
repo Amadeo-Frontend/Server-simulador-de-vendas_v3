@@ -1,48 +1,56 @@
-// src/api/_utils.js
-import crypto from 'node:crypto';
+// backend/api/_utils.js
+import crypto from "node:crypto";
 
-/* ========================== CORS ========================== */
+/* ========================== CORS (para handlers “puros”) ========================== */
 /**
- * Envolve um handler “puro” (req/res nativos) com CORS.
- * - Respeita FRONTEND_ORIGINS (lista separada por vírgula)
- * - Opcional: ALLOW_ALL_ORIGINS=true libera qualquer Origin (útil para debug)
- * - CORS_DEBUG=true imprime no log os origins aceitos/recebidos
+ * Envolve um handler “puro” (req/res nativos) com CORS baseado nas envs:
+ * - FRONTEND_ORIGINS (lista separada por vírgula)
+ * - ALLOW_ALL_ORIGINS=true (libera tudo – útil só para debug)
+ * - CORS_DEBUG=true (log detalhado)
+ *
+ * OBS: no Express você já aplica CORS no middleware global (server/index.js).
+ * Este helper é útil se você tiver algum endpoint independente (serverless-style).
  */
 export function withCors(handler) {
   return async (req, res) => {
     const origin = req.headers.origin;
-    const allowAll = process.env.ALLOW_ALL_ORIGINS === 'true';
+    const allowAll = process.env.ALLOW_ALL_ORIGINS === "true";
 
     const allowedSet = new Set(
-      (process.env.FRONTEND_ORIGINS || process.env.FRONTEND_ORIGIN || '')
-        .split(',')
-        .map(s => s.trim())
+      (process.env.FRONTEND_ORIGINS || process.env.FRONTEND_ORIGIN || "")
+        .split(",")
+        .map((s) => s.trim())
         .filter(Boolean)
     );
 
     const isAllowed = allowAll || (origin && allowedSet.has(origin));
 
-    if (process.env.CORS_DEBUG === 'true') {
-      console.log('[CORS]', {
+    if (process.env.CORS_DEBUG === "true") {
+      console.log("[CORS/withCors]", {
         origin,
         isAllowed,
         allowAll,
         allowed: [...allowedSet],
+        method: req.method,
+        path: req.url,
       });
     }
 
     if (origin && isAllowed) {
-      res.setHeader('Access-Control-Allow-Origin', origin);
-      res.setHeader('Vary', 'Origin');
+      res.setHeader("Access-Control-Allow-Origin", origin);
+      res.setHeader("Vary", "Origin");
     }
-    // Observação: se quiser bloquear quando não permitido, você pode
-    // responder 403 aqui. Neste projeto, apenas não setamos o header.
+    res.setHeader("Access-Control-Allow-Credentials", "true");
+    res.setHeader(
+      "Access-Control-Allow-Headers",
+      "Content-Type, Authorization, X-Requested-With"
+    );
+    res.setHeader(
+      "Access-Control-Allow-Methods",
+      "GET,POST,PUT,PATCH,DELETE,OPTIONS"
+    );
 
-    res.setHeader('Access-Control-Allow-Credentials', 'true');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
-    res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
-
-    if (req.method === 'OPTIONS') {
+    if (req.method === "OPTIONS") {
       res.statusCode = 204;
       return res.end();
     }
@@ -51,77 +59,92 @@ export function withCors(handler) {
 }
 
 /* ========================== Cookies ========================== */
-
+/**
+ * Lê cookie quando não há cookie-parser (em handlers “puros”).
+ * No Express, você pode usar req.cookies[name].
+ */
 export function readCookie(req, name) {
-  const raw = req.headers.cookie || '';
+  const raw = req.headers.cookie || "";
   if (!raw) return null;
   const map = Object.fromEntries(
-    raw.split(';').map(p => {
-      const [k, ...v] = p.trim().split('=');
-      return [decodeURIComponent(k), decodeURIComponent(v.join('='))];
+    raw.split(";").map((p) => {
+      const [k, ...v] = p.trim().split("=");
+      return [decodeURIComponent(k), decodeURIComponent(v.join("="))];
     })
   );
   return map[name] || null;
 }
 
-export function setCookie(res, name, value, { maxAgeMs = 2 * 60 * 60 * 1000 } = {}) {
-  const isProd = process.env.NODE_ENV === 'production';
+/**
+ * Define cookie compatível com cross-site:
+ * - Em produção: SameSite=None; Secure (obrigatório para cookies entre domínios)
+ * - Fora de produção: SameSite=Lax; sem Secure (aceita http://localhost)
+ */
+export function setCookie(
+  res,
+  name,
+  value,
+  { maxAgeMs = 2 * 60 * 60 * 1000 } = {}
+) {
+  const isProd = process.env.NODE_ENV === "production";
   const expires = new Date(Date.now() + maxAgeMs).toUTCString();
   const parts = [
     `${name}=${encodeURIComponent(value)}`,
-    'Path=/',
-    'HttpOnly',
-    isProd ? 'SameSite=None' : 'SameSite=Lax',
-    isProd ? 'Secure' : null,
+    "Path=/",
+    "HttpOnly",
+    isProd ? "SameSite=None" : "SameSite=Lax",
+    isProd ? "Secure" : null,
     `Expires=${expires}`,
-    `Max-Age=${Math.floor(maxAgeMs / 1000)}`
+    `Max-Age=${Math.floor(maxAgeMs / 1000)}`,
   ].filter(Boolean);
-  res.setHeader('Set-Cookie', parts.join('; '));
+  res.setHeader("Set-Cookie", parts.join("; "));
 }
 
 export function clearCookie(res, name) {
-  const isProd = process.env.NODE_ENV === 'production';
+  const isProd = process.env.NODE_ENV === "production";
   const parts = [
     `${name}=;`,
-    'Path=/',
-    'HttpOnly',
-    isProd ? 'SameSite=None' : 'SameSite=Lax',
-    isProd ? 'Secure' : null,
-    'Expires=Thu, 01 Jan 1970 00:00:00 GMT',
-    'Max-Age=0'
+    "Path=/",
+    "HttpOnly",
+    isProd ? "SameSite=None" : "SameSite=Lax",
+    isProd ? "Secure" : null,
+    "Expires=Thu, 01 Jan 1970 00:00:00 GMT",
+    "Max-Age=0",
   ].filter(Boolean);
-  res.setHeader('Set-Cookie', parts.join('; '));
+  res.setHeader("Set-Cookie", parts.join("; "));
 }
 
 /* ========================== Sessão (HMAC tipo JWT) ========================== */
 
 function b64url(input) {
-  return Buffer.from(input).toString('base64url');
+  return Buffer.from(input).toString("base64url");
 }
 function hmac(data, secret) {
-  return crypto.createHmac('sha256', secret).update(data).digest('base64url');
+  return crypto.createHmac("sha256", secret).update(data).digest("base64url");
 }
 
 /** Cria um token assinado simples (header.payload.signature) */
 export function signSession(payload = {}, { ttlSec = 2 * 60 * 60 } = {}) {
-  const header = { alg: 'HS256', typ: 'JWT' };
+  const header = { alg: "HS256", typ: "JWT" };
   const now = Math.floor(Date.now() / 1000);
   const body = { ...payload, iat: now, exp: now + ttlSec };
-  const secret = process.env.SESSION_SECRET || 'dev-secret';
+  const secret = process.env.SESSION_SECRET || "dev-secret";
 
-  const enc = `${b64url(JSON.stringify(header))}.${b64url(JSON.stringify(body))}`;
+  const enc = `${b64url(JSON.stringify(header))}.${b64url(
+    JSON.stringify(body)
+  )}`;
   const sig = hmac(enc, secret);
   return `${enc}.${sig}`;
 }
 
 /** Valida e devolve o payload ou null */
-export function verifySession(token = '') {
+export function verifySession(token = "") {
   try {
-    const [h, p, s] = token.split('.');
+    const [h, p, s] = token.split(".");
     if (!h || !p || !s) return null;
-    const secret = process.env.SESSION_SECRET || 'dev-secret';
+    const secret = process.env.SESSION_SECRET || "dev-secret";
     if (hmac(`${h}.${p}`, secret) !== s) return null;
-    const payload = JSON.parse(Buffer.from(p, 'base64url').toString('utf8'));
+    const payload = JSON.parse(Buffer.from(p, "base64url").toString("utf8"));
     if (payload.exp && Math.floor(Date.now() / 1000) > payload.exp) return null;
     return payload;
   } catch {
@@ -130,17 +153,16 @@ export function verifySession(token = '') {
 }
 
 /* ========================== Body JSON / Bearer ========================== */
-
-/** Lê JSON do body mesmo sem express.json() (handlers “puros”) */
+/** Lê JSON do body mesmo sem express.json() (handlers “puros”). */
 export async function readJson(req) {
-  if (req.body && typeof req.body === 'object') return req.body; // quando usar Express
-  const ctype = req.headers['content-type'] || '';
-  if (!ctype.includes('application/json')) return {};
+  if (req.body && typeof req.body === "object") return req.body; // Quando usar Express
+  const ctype = req.headers["content-type"] || "";
+  if (!ctype.includes("application/json")) return {};
   const chunks = [];
   for await (const chunk of req) chunks.push(chunk);
-  const raw = Buffer.concat(chunks).toString('utf8');
+  const raw = Buffer.concat(chunks).toString("utf8");
   try {
-    return JSON.parse(raw || '{}');
+    return JSON.parse(raw || "{}");
   } catch {
     return {};
   }

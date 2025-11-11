@@ -17,12 +17,18 @@ const __dirname = path.dirname(__filename);
 
 const app = express();
 
-// --------- CORS (via ENV) ----------
+/**
+ * Se o serviço estiver atrás de proxy (Render), isso evita falsos negativos
+ * em req.secure/redirecionamentos e é seguro para cookies “Secure”.
+ */
+app.set("trust proxy", 1);
+
+// --------- CORS (controlado por ENV) ----------
 const allowAll = process.env.ALLOW_ALL_ORIGINS === "true";
 const allowedSet = new Set(
   (process.env.FRONTEND_ORIGINS || process.env.FRONTEND_ORIGIN || "")
     .split(",")
-    .map(s => s.trim())
+    .map((s) => s.trim())
     .filter(Boolean)
 );
 
@@ -30,13 +36,33 @@ app.use((req, res, next) => {
   const origin = req.headers.origin;
   const isAllowed = allowAll || (origin && allowedSet.has(origin));
 
+  // Debug opcional
+  if (process.env.CORS_DEBUG === "true") {
+    console.log("[CORS]", {
+      origin,
+      isAllowed,
+      allowAll,
+      allowed: [...allowedSet],
+      method: req.method,
+      path: req.path,
+    });
+  }
+
   if (origin && isAllowed) {
     res.header("Access-Control-Allow-Origin", origin);
+    // Para caches intermediários respeitarem o Origin
     res.header("Vary", "Origin");
   }
   res.header("Access-Control-Allow-Credentials", "true");
-  res.header("Access-Control-Allow-Headers", "Content-Type, Authorization");
-  res.header("Access-Control-Allow-Methods", "GET,POST,PUT,DELETE,OPTIONS");
+  res.header(
+    "Access-Control-Allow-Headers",
+    "Content-Type, Authorization, X-Requested-With"
+  );
+  res.header(
+    "Access-Control-Allow-Methods",
+    "GET,POST,PUT,PATCH,DELETE,OPTIONS"
+  );
+
   if (req.method === "OPTIONS") return res.sendStatus(204);
   next();
 });
@@ -49,7 +75,9 @@ app.use(express.json());
 app.use("/public", express.static(path.join(__dirname, "public")));
 
 // --------- Health ----------
-app.get("/health", (_req, res) => res.json({ ok: true, time: new Date().toISOString() }));
+app.get("/health", (_req, res) =>
+  res.json({ ok: true, time: new Date().toISOString() })
+);
 app.get("/api/ping", (_req, res) => res.json({ ok: true }));
 
 // --------- Auth ----------
@@ -59,6 +87,11 @@ app.post("/api/logout", (req, res) => logout(req, res));
 
 // --------- Produtos ----------
 app.use("/api/products", productsRouter);
+
+// --------- 404 padrão ----------
+app.use((req, res) => {
+  res.status(404).json({ ok: false, message: "Not found" });
+});
 
 // --------- Start ----------
 const PORT = process.env.PORT || 8080;
