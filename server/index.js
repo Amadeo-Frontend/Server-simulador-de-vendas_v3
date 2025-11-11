@@ -17,32 +17,53 @@ const __dirname = path.dirname(__filename);
 
 const app = express();
 
-/**
- * Se o serviço estiver atrás de proxy (Render), isso evita falsos negativos
- * em req.secure/redirecionamentos e é seguro para cookies “Secure”.
+/* ========================= CORS (via ENV) =========================
+ * ENV esperados:
+ *  - ALLOW_ALL_ORIGINS=true (libera tudo)  [use só para debug]
+ *  - FRONTEND_ORIGINS="https://app.vercel.app,https://app-*.vercel.app,http://localhost:5173"
+ *  - CORS_DEBUG=true  (loga diagnósticos no Render)
  */
-app.set("trust proxy", 1);
-
-// --------- CORS (controlado por ENV) ----------
 const allowAll = process.env.ALLOW_ALL_ORIGINS === "true";
-const allowedSet = new Set(
-  (process.env.FRONTEND_ORIGINS || process.env.FRONTEND_ORIGIN || "")
-    .split(",")
-    .map((s) => s.trim())
-    .filter(Boolean)
-);
+const originPatterns = (process.env.FRONTEND_ORIGINS || process.env.FRONTEND_ORIGIN || "")
+  .split(",")
+  .map((s) => s.trim())
+  .filter(Boolean);
+
+// verifica se um Origin bate com algum padrão (suporta "*")
+function isOriginAllowed(origin) {
+  if (!origin) return false;
+  try {
+    const url = new URL(origin);
+    const full = `${url.protocol}//${url.host}`; // sempre compara protocolo+host
+    for (const pat of originPatterns) {
+      // match exato
+      if (!pat.includes("*") && full === pat) return true;
+
+      // curinga simples (ex.: "*.vercel.app" ou "https://app-*.vercel.app")
+      if (pat.includes("*")) {
+        const esc = pat
+          .replace(/[.+?^${}()|[\]\\]/g, "\\$&")
+          .replace(/\\\*/g, ".*");
+        const re = new RegExp(`^${esc}$`, "i");
+        if (re.test(full)) return true;
+      }
+    }
+    return false;
+  } catch {
+    return false;
+  }
+}
 
 app.use((req, res, next) => {
   const origin = req.headers.origin;
-  const isAllowed = allowAll || (origin && allowedSet.has(origin));
+  const isAllowed = allowAll || isOriginAllowed(origin);
 
-  // Debug opcional
   if (process.env.CORS_DEBUG === "true") {
     console.log("[CORS]", {
       origin,
       isAllowed,
       allowAll,
-      allowed: [...allowedSet],
+      allowed: originPatterns,
       method: req.method,
       path: req.path,
     });
@@ -50,7 +71,6 @@ app.use((req, res, next) => {
 
   if (origin && isAllowed) {
     res.header("Access-Control-Allow-Origin", origin);
-    // Para caches intermediários respeitarem o Origin
     res.header("Vary", "Origin");
   }
   res.header("Access-Control-Allow-Credentials", "true");
@@ -67,32 +87,27 @@ app.use((req, res, next) => {
   next();
 });
 
-// --------- Parsers ----------
+/* ========================= Parsers ========================= */
 app.use(cookieParser());
 app.use(express.json());
 
-// --------- Estáticos (opcional) ----------
+/* ========================= Estáticos (opcional) ========================= */
 app.use("/public", express.static(path.join(__dirname, "public")));
 
-// --------- Health ----------
+/* ========================= Health ========================= */
 app.get("/health", (_req, res) =>
   res.json({ ok: true, time: new Date().toISOString() })
 );
 app.get("/api/ping", (_req, res) => res.json({ ok: true }));
 
-// --------- Auth ----------
+/* ========================= Auth ========================= */
 app.post("/api/login", (req, res) => login(req, res));
 app.get("/api/me", (req, res) => me(req, res));
 app.post("/api/logout", (req, res) => logout(req, res));
 
-// --------- Produtos ----------
+/* ========================= Produtos ========================= */
 app.use("/api/products", productsRouter);
 
-// --------- 404 padrão ----------
-app.use((req, res) => {
-  res.status(404).json({ ok: false, message: "Not found" });
-});
-
-// --------- Start ----------
+/* ========================= Start ========================= */
 const PORT = process.env.PORT || 8080;
 app.listen(PORT, () => console.log("Server listening on", PORT));
