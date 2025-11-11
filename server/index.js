@@ -17,36 +17,107 @@ const __dirname = path.dirname(__filename);
 
 const app = express();
 
-// --------- CORS (via ENV) ----------
+/* ========================= CORS ========================= */
+
 const allowAll = process.env.ALLOW_ALL_ORIGINS === "true";
 
-function parseAllowed() {
+/** Lê lista de origins/hosts do ENV (separados por vírgula) */
+function parseAllowedList() {
   return (process.env.FRONTEND_ORIGINS || process.env.FRONTEND_ORIGIN || "")
     .split(",")
     .map(s => s.trim())
     .filter(Boolean);
 }
 
-function buildMatcher(list) {
-  const exact = new Set();
-  const suffixes = [];
-  for (const item of list) {
-    if (item.startsWith("*.")) {
-      suffixes.push(item.slice(1)); // "*.vercel.app" -> ".vercel.app"
-    } else if (item.startsWith(".")) {
-      suffixes.push(item);          // ".vercel.app"
-    } else {
-      exact.add(item);              // "https://meuapp.com"
+/** Remove barra final de um origin e normaliza */
+function normalizeOrigin(origin) {
+  if (!origin) return "";
+  return origin.replace(/\/+$/, ""); // tira / do final
+}
+
+/** Extrai host (sem protocolo) de um origin/padrão */
+function getHostFromPattern(pat) {
+  try {
+    // tem protocolo?
+    if (/^https?:\/\//i.test(pat)) {
+      return new URL(normalizeOrigin(pat)).host; // ex: reactjs...vercel.app
     }
+    // sem protocolo: já é host
+    return pat;
+  } catch {
+    return pat;
   }
+}
+
+/**
+ * Constrói um verificador que:
+ *  - dá match exato com origins informados (sem barra final)
+ *  - dá match por sufixo de host (wildcards *.dominio)
+ *
+ * Padrões aceitos (exemplos):
+ *  - https://meusite.com
+ *  - https://meusite.com/
+ *  - meusite.com
+ *  - .vercel.app
+ *  - *.vercel.app
+ *  - https://*.vercel.app
+ */
+function buildMatcher(list) {
+  const exactOrigins = new Set(); // origins exatos normalizados
+  const hostSuffixes = new Set(); // sufixos de host (ex: "vercel.app")
+
+  for (let pat of list) {
+    // normaliza
+    pat = pat.trim();
+
+    // 1) Se for wildcard com protocolo (ex: "https://*.vercel.app")
+    if (/^https?:\/\/\*\./i.test(pat)) {
+      const host = getHostFromPattern(pat).replace(/^\*\./, ""); // "*.vercel.app" -> "vercel.app"
+      if (host) hostSuffixes.add(host.toLowerCase());
+      continue;
+    }
+
+    // 2) Se começar com "*." ou "." (ex: "*.vercel.app" / ".vercel.app")
+    if (/^\*\./.test(pat) || /^\./.test(pat)) {
+      const host = pat.replace(/^\*\./, "").replace(/^\./, ""); // "*.vercel.app" -> "vercel.app"
+      if (host) hostSuffixes.add(host.toLowerCase());
+      continue;
+    }
+
+    // 3) Se tiver protocolo e não tiver wildcard -> match exato por origin completo
+    if (/^https?:\/\//i.test(pat)) {
+      exactOrigins.add(normalizeOrigin(pat).toLowerCase());
+      continue;
+    }
+
+    // 4) Sem protocolo e sem wildcard: pode ser host puro (ex: "meusite.com")
+    //    Nesse caso, tratamos como sufixo (equivale a *.meusite.com)
+    hostSuffixes.add(pat.toLowerCase());
+  }
+
   return (origin) => {
     if (!origin) return false;
-    if (exact.has(origin)) return true;
-    return suffixes.some(suf => origin.endsWith(suf));
+
+    // match exato por origin (sem barra final)
+    const normOrigin = normalizeOrigin(origin).toLowerCase();
+    if (exactOrigins.has(normOrigin)) return true;
+
+    // match por sufixo de host
+    try {
+      const { host } = new URL(origin);
+      const h = (host || "").toLowerCase();
+      for (const suf of hostSuffixes) {
+        // casa "dominio" e "sub.dominio"
+        if (h === suf || h.endsWith(`.${suf}`)) return true;
+      }
+    } catch {
+      // se origin vier inválido, ignoramos
+    }
+    return false;
   };
 }
 
-const allowedList = parseAllowed();
+const allowedList = parseAllowedList();
 const isAllowedOrigin = buildMatcher(allowedList);
 
 app.use((req, res, next) => {
@@ -75,7 +146,6 @@ app.use((req, res, next) => {
   if (req.method === "OPTIONS") return res.sendStatus(204);
   next();
 });
-
 
 /* ========================= Parsers ========================= */
 app.use(cookieParser());
