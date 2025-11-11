@@ -1,160 +1,125 @@
-import express from "express";
-import { ensureDataFile, readAll, create, update, remove } from "../server/productsStore.js";
+// backend/api/products.js
+import { Router } from "express";
 
-const router = express.Router();
-ensureDataFile();
+let products = [
+  {
+    id: 1,
+    sku: "573",
+    nome: "Teks Dog Original 18% 7kg",
+    peso: 7,
+    custo: 18.88,
+    preco_venda_A: 30.00, preco_venda_B: 29.09, preco_venda_C: 28.21,
+    preco_venda_A_prazo: 30.93, preco_venda_B_prazo: 29.99, preco_venda_C_prazo: 29.08,
+    bonificacao_unitaria: 0
+  }
+];
 
-const requireAuth = (req, res, next) => next();
+const router = Router();
 
-// CRUD
-router.get("/", requireAuth, (_req, res) => res.json(readAll()));
-router.post("/", requireAuth, (req, res) => {
-  const b = req.body || {};
-  if (!b.nome || !b.sku) return res.status(400).json({ message: "nome e sku são obrigatórios" });
-  const item = create(b);
-  res.status(201).json(item);
+// LISTAR
+router.get("/", (_req, res) => res.json(products));
+
+// CRIAR
+router.post("/", (req, res) => {
+  const body = req.body || {};
+  const id = products.length ? Math.max(...products.map(p => p.id)) + 1 : 1;
+  const novo = { id, ...body };
+  products.push(novo);
+  res.status(201).json(novo);
 });
-router.put("/:id", requireAuth, (req, res) => {
+
+// ATUALIZAR
+router.put("/:id", (req, res) => {
   const id = Number(req.params.id);
-  const upd = update(id, req.body || {});
-  if (!upd) return res.status(404).json({ message: "not found" });
-  res.json(upd);
+  const idx = products.findIndex(p => p.id === id);
+  if (idx < 0) return res.status(404).json({ message: "Produto não encontrado" });
+  products[idx] = { ...products[idx], ...req.body, id };
+  res.json(products[idx]);
 });
-router.delete("/:id", requireAuth, (req, res) => {
+
+// DELETAR
+router.delete("/:id", (req, res) => {
   const id = Number(req.params.id);
-  const ok = remove(id);
-  if (!ok) return res.status(404).json({ message: "not found" });
+  const before = products.length;
+  products = products.filter(p => p.id !== id);
+  if (before === products.length) return res.status(404).json({ message: "Produto não encontrado" });
   res.json({ ok: true });
 });
 
-// Export CSV
-router.get("/export.csv", requireAuth, (_req, res) => {
-  const rows = readAll();
-  const headers = ["id","sku","nome","peso","preco_venda_A","preco_venda_B","preco_venda_C","preco_venda_A_prazo","preco_venda_B_prazo","preco_venda_C_prazo","custo","bonificacao_unitaria"];
-  const escape = (v) => {
-    if (v == null) return "";
-    const s = String(v);
-    return /[;"\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
-  };
-  const csv = [headers.join(";")].concat(rows.map(r => headers.map(h => escape(r[h] ?? "")).join(";"))).join("\n");
-  const stamp = new Date().toISOString().slice(0,19).replace(/[:T]/g,"-");
+// CSV
+router.get("/export/csv", (_req, res) => {
+  const headers = [
+    "id","sku","nome","peso","custo",
+    "preco_venda_A","preco_venda_B","preco_venda_C",
+    "preco_venda_A_prazo","preco_venda_B_prazo","preco_venda_C_prazo",
+    "bonificacao_unitaria"
+  ];
+  const rows = [headers.join(",")];
+  for (const p of products) {
+    rows.push(headers.map(h => JSON.stringify(p[h] ?? "")).join(","));
+  }
   res.setHeader("Content-Type", "text/csv; charset=utf-8");
-  res.setHeader("Content-Disposition", `attachment; filename="produtos-${stamp}.csv"`);
-  res.send("\uFEFF" + csv);
+  res.setHeader("Content-Disposition", 'attachment; filename="produtos.csv"');
+  res.send(rows.join("\n"));
 });
 
-// Export HTML (com cores e logo)
-router.get("/export.html", requireAuth, (req, res) => {
-  const items = readAll();
-  const baseUrl = `${req.protocol}://${req.get("host")}`;
-  const logoUrl = `${baseUrl}/static/logo.png`;
-  const stamp = new Date().toISOString().replace("T"," ").slice(0,19);
-
-  const azul = "#1e63b8";
-  const azulClaro = "#8ec5ff";
-  const verde = "#16a34a";
-  const amareloC = "#eab308";
-  const fundo = "#0f172a";
-  const carta = "#0b1220";
-
-  const style = `
-    :root { color-scheme: dark; }
-    * { box-sizing:border-box; }
-    body { margin:0; background:${fundo}; color:#e5e7eb; font-family: Inter, ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, Noto Sans, Arial; }
-    .wrap { max-width:1200px; margin:28px auto; padding:0 16px; }
-    .head { display:flex; align-items:center; gap:16px; margin-bottom:16px; }
-    .head img { width:56px; height:56px; border-radius:50%; object-fit:cover; box-shadow:0 0 0 3px ${azul}; }
-    .card { background:${carta}; border:1px solid rgba(255,255,255,.08); border-radius:14px; padding:16px; }
-    h1 { margin:0; font-size:20px; }
-    .meta { color:#94a3b8; font-size:12px; }
-    table { width:100%; border-collapse:separate; border-spacing:0; margin-top:10px; }
-    thead th { font-size:12px; letter-spacing:.02em; text-transform:uppercase; color:#cbd5e1; padding:12px 10px; position:sticky; top:0; background:${carta}; border-bottom:1px solid rgba(255,255,255,.08) }
-    tbody td { padding:10px; border-bottom:1px solid rgba(255,255,255,.06); font-size:14px; }
-    tbody tr:nth-child(odd){ background:rgba(255,255,255,.02) }
-    .sku { font-variant-numeric: tabular-nums; color:#cbd5e1; }
-    .peso { color:#cbd5e1; }
-    .preco { text-align:right; font-variant-numeric: tabular-nums; }
-    .vista-title, .prazo-title { color:white; text-align:center; background:${verde}; }
-    .prazo-title { background:${verde}; opacity:.9; }
-    .col-C { background:${amareloC}22; }
-    .col-custo { background:${azulClaro}22; }
-    .nome { font-weight:600; color:#e2e8f0; }
-    .rodape { margin-top:8px; color:#94a3b8; font-size:12px;}
-    @media print {
-      body { background:white; color:black; }
-      .card { background:white; border-color:#ddd; }
-      .vista-title, .prazo-title, .col-C, .col-custo { -webkit-print-color-adjust:exact; print-color-adjust: exact; }
-    }
-  `;
-
-  const headerRow = `
-    <tr>
-      <th rowspan="2">SKU</th>
-      <th rowspan="2" style="text-align:left;">Produto</th>
-      <th rowspan="2">Peso</th>
-      <th colspan="3" class="vista-title">À vista</th>
-      <th colspan="3" class="prazo-title">A prazo</th>
-      <th rowspan="2">Bonif.</th>
-      <th rowspan="2">Custo</th>
-    </tr>
-    <tr>
-      <th>A</th><th>B</th><th>C</th>
-      <th>A</th><th>B</th><th>C</th>
-    </tr>
-  `;
-
-  const fmt = (v) => typeof v === "number" ? v.toLocaleString("pt-BR",{style:"currency",currency:"BRL"}) : (v ?? "");
-  const rowsHtml = items.map(p => `
-    <tr>
-      <td class="sku">${p.sku}</td>
-      <td class="nome">${p.nome}</td>
-      <td class="peso">${p.peso ?? ""} kg</td>
-      <td class="preco">${fmt(p.preco_venda_A)}</td>
-      <td class="preco">${fmt(p.preco_venda_B)}</td>
-      <td class="preco col-C">${fmt(p.preco_venda_C)}</td>
-      <td class="preco">${fmt(p.preco_venda_A_prazo)}</td>
-      <td class="preco">${fmt(p.preco_venda_B_prazo)}</td>
-      <td class="preco col-C">${fmt(p.preco_venda_C_prazo)}</td>
-      <td class="preco">${fmt(p.bonificacao_unitaria)}</td>
-      <td class="preco col-custo">${fmt(p.custo)}</td>
-    </tr>
-  `).join("");
-
+// HTML estiloso (cores solicitadas)
+router.get("/export/html", (_req, res) => {
+  const fmt = v => isFinite(v) ? Number(v).toFixed(2) : v ?? "";
   const html = `<!doctype html>
-<html lang="pt-BR">
-<head>
-<meta charset="utf-8" />
-<meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>Tabela de Produtos • ${stamp}</title>
-<link rel="icon" href="${logoUrl}" />
-<style>${style}</style>
-</head>
+<html lang="pt-BR"><head><meta charset="utf-8"/>
+<title>Catálogo de Produtos</title>
+<style>
+  body{font-family:system-ui,-apple-system,Segoe UI,Roboto; background:#0f172a; color:#e2e8f0; margin:24px;}
+  .brand{display:flex;align-items:center;gap:12px;margin-bottom:16px}
+  .brand img{width:40px;height:40px}
+  h1{margin:0;font-size:20px}
+  table{width:100%;border-collapse:separate;border-spacing:0 8px}
+  th,td{padding:12px 14px;text-align:left}
+  th{color:#94a3b8;font-weight:600}
+  tr{background:#0b1220;border-radius:12px}
+  tr td:first-child{border-top-left-radius:12px;border-bottom-left-radius:12px}
+  tr td:last-child{border-top-right-radius:12px;border-bottom-right-radius:12px}
+  .badge{display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px}
+  .custo{background:#1e40af33;color:#93c5fd} /* custo: azul claro */
+  .av{background:#10b98133;color:#86efac}   /* A (à vista): verde   */
+  .bz{background:#ffffff22;color:#e2e8f0;border:1px solid #ffffff33} /* B: branco */
+  .cz{background:#f59e0b33;color:#fde68a}   /* C: amarelo escuro    */
+</style></head>
 <body>
-  <div class="wrap">
-    <div class="head">
-      <img src="${logoUrl}" alt="Logo" />
-      <div>
-        <h1>Tabela de Produtos</h1>
-        <div class="meta">Gerado em ${stamp}</div>
-      </div>
-    </div>
-    <div class="card">
-      <table>
-        <thead>${headerRow}</thead>
-        <tbody>${rowsHtml}</tbody>
-      </table>
-      <div class="rodape">À vista / A prazo em <span style="color:${verde}">verde</span>,
-        preço C em <span style="color:${amareloC}">amarelo</span>, custo em
-        <span style="color:${azulClaro}">azul claro</span>.
-      </div>
-    </div>
+  <div class="brand">
+    <img src="/public/logo.png" alt="logo"/>
+    <h1>Sulpet • Tabela de Produtos</h1>
   </div>
-</body>
-</html>`;
-
-  const fileName = `produtos-${stamp.replace(/[: ]/g, "-")}.html`;
+  <table>
+    <thead>
+      <tr>
+        <th>ID</th><th>SKU</th><th>Nome</th><th>Peso</th>
+        <th>Custo</th>
+        <th>A (à vista)</th><th>A (prazo)</th>
+        <th>B (à vista)</th><th>B (prazo)</th>
+        <th>C (à vista)</th><th>C (prazo)</th>
+      </tr>
+    </thead>
+    <tbody>
+      ${products.map(p => `
+        <tr>
+          <td>${p.id}</td>
+          <td>${p.sku}</td>
+          <td>${p.nome}</td>
+          <td>${p.peso ?? ""}</td>
+          <td><span class="badge custo">R$ ${fmt(p.custo)}</span></td>
+          <td><span class="badge av">R$ ${fmt(p.preco_venda_A)}</span></td>
+          <td><span class="badge av">R$ ${fmt(p.preco_venda_A_prazo)}</span></td>
+          <td><span class="badge bz">R$ ${fmt(p.preco_venda_B)}</span></td>
+          <td><span class="badge bz">R$ ${fmt(p.preco_venda_B_prazo)}</span></td>
+          <td><span class="badge cz">R$ ${fmt(p.preco_venda_C)}</span></td>
+          <td><span class="badge cz">R$ ${fmt(p.preco_venda_C_prazo)}</span></td>
+        </tr>`).join("")}
+    </tbody>
+  </table>
+</body></html>`;
   res.setHeader("Content-Type", "text/html; charset=utf-8");
-  res.setHeader("Content-Disposition", `inline; filename="${fileName}"`);
   res.send(html);
 });
 
