@@ -17,75 +17,65 @@ const __dirname = path.dirname(__filename);
 
 const app = express();
 
-/* ========================= CORS (via ENV) =========================
- * ENV esperados:
- *  - ALLOW_ALL_ORIGINS=true (libera tudo)  [use só para debug]
- *  - FRONTEND_ORIGINS="https://app.vercel.app,https://app-*.vercel.app,http://localhost:5173"
- *  - CORS_DEBUG=true  (loga diagnósticos no Render)
- */
+// --------- CORS (via ENV) ----------
 const allowAll = process.env.ALLOW_ALL_ORIGINS === "true";
-const originPatterns = (process.env.FRONTEND_ORIGINS || process.env.FRONTEND_ORIGIN || "")
-  .split(",")
-  .map((s) => s.trim())
-  .filter(Boolean);
 
-// verifica se um Origin bate com algum padrão (suporta "*")
-function isOriginAllowed(origin) {
-  if (!origin) return false;
-  try {
-    const url = new URL(origin);
-    const full = `${url.protocol}//${url.host}`; // sempre compara protocolo+host
-    for (const pat of originPatterns) {
-      // match exato
-      if (!pat.includes("*") && full === pat) return true;
-
-      // curinga simples (ex.: "*.vercel.app" ou "https://app-*.vercel.app")
-      if (pat.includes("*")) {
-        const esc = pat
-          .replace(/[.+?^${}()|[\]\\]/g, "\\$&")
-          .replace(/\\\*/g, ".*");
-        const re = new RegExp(`^${esc}$`, "i");
-        if (re.test(full)) return true;
-      }
-    }
-    return false;
-  } catch {
-    return false;
-  }
+function parseAllowed() {
+  return (process.env.FRONTEND_ORIGINS || process.env.FRONTEND_ORIGIN || "")
+    .split(",")
+    .map(s => s.trim())
+    .filter(Boolean);
 }
+
+function buildMatcher(list) {
+  const exact = new Set();
+  const suffixes = [];
+  for (const item of list) {
+    if (item.startsWith("*.")) {
+      suffixes.push(item.slice(1)); // "*.vercel.app" -> ".vercel.app"
+    } else if (item.startsWith(".")) {
+      suffixes.push(item);          // ".vercel.app"
+    } else {
+      exact.add(item);              // "https://meuapp.com"
+    }
+  }
+  return (origin) => {
+    if (!origin) return false;
+    if (exact.has(origin)) return true;
+    return suffixes.some(suf => origin.endsWith(suf));
+  };
+}
+
+const allowedList = parseAllowed();
+const isAllowedOrigin = buildMatcher(allowedList);
 
 app.use((req, res, next) => {
   const origin = req.headers.origin;
-  const isAllowed = allowAll || isOriginAllowed(origin);
+  const ok = allowAll || isAllowedOrigin(origin);
 
   if (process.env.CORS_DEBUG === "true") {
     console.log("[CORS]", {
       origin,
-      isAllowed,
+      isAllowed: ok,
       allowAll,
-      allowed: originPatterns,
+      allowed: allowedList,
       method: req.method,
-      path: req.path,
+      path: req.path
     });
   }
 
-  if (origin && isAllowed) {
+  if (origin && ok) {
     res.header("Access-Control-Allow-Origin", origin);
     res.header("Vary", "Origin");
   }
   res.header("Access-Control-Allow-Credentials", "true");
-  res.header(
-    "Access-Control-Allow-Headers",
-    "Content-Type, Authorization, X-Requested-With"
-  );
-  res.header(
-    "Access-Control-Allow-Methods",
-    "GET,POST,PUT,PATCH,DELETE,OPTIONS"
-  );
+  res.header("Access-Control-Allow-Headers", "Content-Type, Authorization");
+  res.header("Access-Control-Allow-Methods", "GET,POST,PUT,DELETE,OPTIONS");
 
   if (req.method === "OPTIONS") return res.sendStatus(204);
   next();
 });
+
 
 /* ========================= Parsers ========================= */
 app.use(cookieParser());
