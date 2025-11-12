@@ -2,55 +2,30 @@
 import { withCors, setCookie, signSession, readJson } from './_utils.js';
 
 /**
- * Lê usuários das ENVs, aceitando 3 formatos:
- * 1) USERS_JSON: '[{"user":"admin","pass":"123"},{"user":"vendas","pass":"456"}]'
- * 2) USERS_LIST: 'admin:123;vendas:456'  (separador ; ou ,)
- * 3) ADMIN_USER / ADMIN_PASS (legado, 1 usuário)
+ * Lê AUTH_USERS do ambiente e devolve [{ user, pass }, ...]
+ * Formato: "user1:senha1;user2:senha2;user3:senha3"
  */
 function parseUsersEnv() {
-  const out = [];
+  const raw = process.env.AUTH_USERS || '';
+  return raw
+    .split(';')
+    .map(s => s.trim())
+    .filter(Boolean)
+    .map(pair => {
+      const idx = pair.indexOf(':');
+      if (idx === -1) return null;
+      const user = pair.slice(0, idx).trim();
+      const pass = pair.slice(idx + 1).trim();
+      if (!user || !pass) return null;
+      return { user, pass };
+    })
+    .filter(Boolean);
+}
 
-  // 1) JSON
-  const json = process.env.USERS_JSON;
-  if (json) {
-    try {
-      const arr = JSON.parse(json);
-      if (Array.isArray(arr)) {
-        for (const it of arr) {
-          if (
-            it &&
-            typeof it.user === 'string' &&
-            typeof it.pass === 'string' &&
-            it.user.trim() &&
-            it.pass.trim()
-          ) {
-            out.push({ user: it.user.trim(), pass: it.pass.trim() });
-          }
-        }
-      }
-    } catch (_) {
-      // ignora JSON inválido
-    }
-  }
-
-  // 2) Lista "user:pass;user2:pass2"
-  if (out.length === 0 && process.env.USERS_LIST) {
-    const parts = String(process.env.USERS_LIST).split(/[;,]/);
-    for (const p of parts) {
-      const [user, pass] = p.split(':');
-      if (user && pass) out.push({ user: user.trim(), pass: pass.trim() });
-    }
-  }
-
-  // 3) Fallback legado
-  if (out.length === 0 && process.env.ADMIN_USER && process.env.ADMIN_PASS) {
-    out.push({
-      user: String(process.env.ADMIN_USER).trim(),
-      pass: String(process.env.ADMIN_PASS).trim(),
-    });
-  }
-
-  return out;
+function checkCredentials(list, username, password) {
+  const u = String(username || '').trim();
+  const p = String(password || '');
+  return list.some(item => item.user === u && item.pass === p);
 }
 
 export default withCors(async (req, res) => {
@@ -70,20 +45,34 @@ export default withCors(async (req, res) => {
     return res.end(JSON.stringify({ message: 'Usuário e senha obrigatórios' }));
   }
 
+  // 1) multiusuários via AUTH_USERS
   const users = parseUsersEnv();
-  const match = users.find(u => u.user === username && u.pass === password);
 
-  if (match) {
-    const ttlSec = 2 * 60 * 60; // 2h
-    const token = signSession({ sub: username }, { ttlSec });
+  // 2) compat: se não tiver AUTH_USERS, cai no ADMIN_USER/ADMIN_PASS (opcional)
+  const singleOk =
+    process.env.ADMIN_USER &&
+    process.env.ADMIN_PASS &&
+    username === process.env.ADMIN_USER &&
+    password === process.env.ADMIN_PASS;
 
-    // Cookie httpOnly; em produção _utils aplica SameSite=None; Secure
-    setCookie(res, 'session', token, { maxAgeMs: ttlSec * 1000 });
+  const multiOk = users.length > 0 && checkCredentials(users, username, password);
 
-    res.statusCode = 200;
-    return res.end(JSON.stringify({ ok: true, token, expiresIn: ttlSec }));
+  if (!singleOk && !multiOk) {
+    res.statusCode = 401;
+    return res.end(JSON.stringify({ message: 'Credenciais inválidas' }));
   }
 
-  res.statusCode = 401;
-  return res.end(JSON.stringify({ message: 'Credenciais inválidas' }));
+  // sessão 2h
+  const ttlSec = 2 * 60 * 60;
+  const token = signSession({ sub: username }, { ttlSec });
+
+  // Cookie httpOnly; quando estiver em produção, _utils.js normalmente aplica SameSite=None; Secure
+  setCookie(res, 'session', token, {
+    maxAgeMs: ttlSec * 1000,
+    path: '/',                 // garante leitura em toda a app
+    // domain: 'seu-dominio.com.br', // (opcional) defina se front/back tiverem subdomínios específicos
+  });
+
+  res.statusCode = 200;
+  return res.end(JSON.stringify({ ok: true, token, expiresIn: ttlSec }));
 });
