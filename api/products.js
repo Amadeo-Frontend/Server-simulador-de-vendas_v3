@@ -1,53 +1,123 @@
 // backend/api/products.js
 import { Router } from "express";
+import fs from "node:fs/promises";
+import path from "node:path";
 
-let products = [
-  {
-    id: 1,
-    sku: "573",
-    nome: "Teks Dog Original 18% 7kg",
-    peso: 7,
-    custo: 18.88,
-    preco_venda_A: 30.00, preco_venda_B: 29.09, preco_venda_C: 28.21,
-    preco_venda_A_prazo: 30.93, preco_venda_B_prazo: 29.99, preco_venda_C_prazo: 29.08,
-    bonificacao_unitaria: 0
+const DATA_DIR = process.env.DATA_DIR || "/data";
+const FILE = path.join(DATA_DIR, "products.json");
+const BACKUP_DIR = path.join(DATA_DIR, "backups");
+
+// ------- IO persistente (atômico + backup) -------
+async function loadProducts() {
+  try {
+    const s = await fs.readFile(FILE, "utf8");
+    const json = JSON.parse(s);
+    return Array.isArray(json) ? json : [];
+  } catch {
+    // tenta último backup válido
+    try {
+      const files = (await fs.readdir(BACKUP_DIR))
+        .filter(f => f.endsWith(".json"))
+        .sort()
+        .reverse();
+      if (files[0]) {
+        const b = await fs.readFile(path.join(BACKUP_DIR, files[0]), "utf8");
+        return JSON.parse(b);
+      }
+    } catch {}
+    // seed inicial opcional
+    return [{
+      id: 1,
+      sku: "573",
+      nome: "Teks Dog Original 18% 7kg",
+      peso: 7,
+      custo: 18.88,
+      preco_venda_A: 30.00, preco_venda_B: 29.09, preco_venda_C: 28.21,
+      preco_venda_A_prazo: 30.93, preco_venda_B_prazo: 29.99, preco_venda_C_prazo: 29.08,
+      bonificacao_unitaria: 0
+    }];
   }
-];
+}
 
+async function saveProducts(list) {
+  if (!Array.isArray(list)) throw new Error("products must be array");
+  await fs.mkdir(DATA_DIR, { recursive: true });
+  await fs.mkdir(BACKUP_DIR, { recursive: true });
+  const tmp = FILE + ".tmp";
+  const json = JSON.stringify(list, null, 2);
+  await fs.writeFile(tmp, json, "utf8");
+  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+  await fs.writeFile(path.join(BACKUP_DIR, `products_${stamp}.json`), json, "utf8");
+  await fs.rename(tmp, FILE);
+
+  // mantém 20 backups
+  try {
+    const files = (await fs.readdir(BACKUP_DIR))
+      .filter(f => f.endsWith(".json"))
+      .sort()
+      .reverse();
+    await Promise.all(files.slice(20).map(f => fs.rm(path.join(BACKUP_DIR, f))));
+  } catch {}
+}
+
+// cache em memória (carregado do disco na primeira requisição)
+let productsCache = null;
+async function products() {
+  if (!productsCache) productsCache = await loadProducts();
+  return productsCache;
+}
+async function commit() {
+  await saveProducts(productsCache || []);
+}
+
+// ----------------- Router -----------------
 const router = Router();
 
 // LISTAR
-router.get("/", (_req, res) => res.json(products));
+router.get("/", async (_req, res) => {
+  res.json(await products());
+});
 
 // CRIAR
-router.post("/", (req, res) => {
+router.post("/", async (req, res) => {
   const body = req.body || {};
-  const id = products.length ? Math.max(...products.map(p => p.id)) + 1 : 1;
+  if (!body.sku?.trim() || !body.nome?.trim()) {
+    return res.status(400).json({ message: "SKU e nome são obrigatórios" });
+  }
+  const list = await products();
+  const id = list.length ? Math.max(...list.map(p => p.id || 0)) + 1 : 1;
   const novo = { id, ...body };
-  products.push(novo);
+  list.push(novo);
+  await commit();
   res.status(201).json(novo);
 });
 
 // ATUALIZAR
-router.put("/:id", (req, res) => {
+router.put("/:id", async (req, res) => {
   const id = Number(req.params.id);
-  const idx = products.findIndex(p => p.id === id);
+  const list = await products();
+  const idx = list.findIndex(p => p.id === id);
   if (idx < 0) return res.status(404).json({ message: "Produto não encontrado" });
-  products[idx] = { ...products[idx], ...req.body, id };
-  res.json(products[idx]);
+  list[idx] = { ...list[idx], ...req.body, id };
+  await commit();
+  res.json(list[idx]);
 });
 
 // DELETAR
-router.delete("/:id", (req, res) => {
+router.delete("/:id", async (req, res) => {
   const id = Number(req.params.id);
-  const before = products.length;
-  products = products.filter(p => p.id !== id);
-  if (before === products.length) return res.status(404).json({ message: "Produto não encontrado" });
+  const list = await products();
+  const before = list.length;
+  productsCache = list.filter(p => p.id !== id);
+  if (before === productsCache.length)
+    return res.status(404).json({ message: "Produto não encontrado" });
+  await commit();
   res.json({ ok: true });
 });
 
 // CSV
-router.get("/export/csv", (_req, res) => {
+router.get("/export/csv", async (_req, res) => {
+  const list = await products();
   const headers = [
     "id","sku","nome","peso","custo",
     "preco_venda_A","preco_venda_B","preco_venda_C",
@@ -55,7 +125,7 @@ router.get("/export/csv", (_req, res) => {
     "bonificacao_unitaria"
   ];
   const rows = [headers.join(",")];
-  for (const p of products) {
+  for (const p of list) {
     rows.push(headers.map(h => JSON.stringify(p[h] ?? "")).join(","));
   }
   res.setHeader("Content-Type", "text/csv; charset=utf-8");
@@ -63,17 +133,15 @@ router.get("/export/csv", (_req, res) => {
   res.send(rows.join("\n"));
 });
 
-// HTML estiloso (cores solicitadas)
-router.get("/export/html", (_req, res) => {
-  const fmt = v => isFinite(v) ? Number(v).toFixed(2) : v ?? "";
+// HTML
+router.get("/export/html", async (_req, res) => {
+  const list = await products();
+  const fmt = v => Number.isFinite(v) ? Number(v).toFixed(2) : (v ?? "");
   const html = `<!doctype html>
 <html lang="pt-BR"><head><meta charset="utf-8"/>
 <title>Catálogo de Produtos</title>
 <style>
-  body{font-family:system-ui,-apple-system,Segoe UI,Roboto; background:#0f172a; color:#e2e8f0; margin:24px;}
-  .brand{display:flex;align-items:center;gap:12px;margin-bottom:16px}
-  .brand img{width:40px;height:40px}
-  h1{margin:0;font-size:20px}
+  body{font-family:system-ui,-apple-system,Segoe UI,Roboto;background:#0f172a;color:#e2e8f0;margin:24px}
   table{width:100%;border-collapse:separate;border-spacing:0 8px}
   th,td{padding:12px 14px;text-align:left}
   th{color:#94a3b8;font-weight:600}
@@ -81,16 +149,13 @@ router.get("/export/html", (_req, res) => {
   tr td:first-child{border-top-left-radius:12px;border-bottom-left-radius:12px}
   tr td:last-child{border-top-right-radius:12px;border-bottom-right-radius:12px}
   .badge{display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px}
-  .custo{background:#1e40af33;color:#93c5fd} /* custo: azul claro */
-  .av{background:#10b98133;color:#86efac}   /* A (à vista): verde   */
-  .bz{background:#ffffff22;color:#e2e8f0;border:1px solid #ffffff33} /* B: branco */
-  .cz{background:#f59e0b33;color:#fde68a}   /* C: amarelo escuro    */
+  .custo{background:#1e40af33;color:#93c5fd}
+  .av{background:#10b98133;color:#86efac}
+  .bz{background:#ffffff22;color:#e2e8f0;border:1px solid #ffffff33}
+  .cz{background:#f59e0b33;color:#fde68a}
 </style></head>
 <body>
-  <div class="brand">
-    <img src="/public/logo.png" alt="logo"/>
-    <h1>Sulpet • Tabela de Produtos</h1>
-  </div>
+  <h1>Sulpet • Tabela de Produtos</h1>
   <table>
     <thead>
       <tr>
@@ -102,7 +167,7 @@ router.get("/export/html", (_req, res) => {
       </tr>
     </thead>
     <tbody>
-      ${products.map(p => `
+      ${list.map(p => `
         <tr>
           <td>${p.id}</td>
           <td>${p.sku}</td>
