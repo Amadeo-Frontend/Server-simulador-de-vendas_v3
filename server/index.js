@@ -9,6 +9,7 @@ import productsRouter from "../api/products.js";
 import login from "../api/login.js";
 import me from "../api/me.js";
 import logout from "../api/logout.js";
+import salesRouter from "./api/sales.js";
 
 dotenv.config();
 
@@ -167,6 +168,9 @@ app.post("/api/logout", (req, res) => logout(req, res));
 
 /* ========================= Produtos ========================= */
 app.use("/api/products", productsRouter);
+
+app.use("/api/products", productsRouter);
+app.use("/api/sales", salesRouter);
 
 /* ========================= Start ========================= */
 const PORT = process.env.PORT || 8080;
