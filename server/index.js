@@ -9,7 +9,7 @@ import productsRouter from "../api/products.js";
 import login from "../api/login.js";
 import me from "../api/me.js";
 import logout from "../api/logout.js";
-import salesRouter from "./api/sales.js";
+import salesRouter from "../api/sales.js";
 
 dotenv.config();
 
